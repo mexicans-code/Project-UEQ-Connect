@@ -8,10 +8,9 @@ on:
 
 jobs:
   test:
-    name: Run Jest Tests
+    name: Run All Tests
     runs-on: ubuntu-latest
 
-    # Base de datos MongoDB para los tests
     services:
       mongodb:
         image: mongo:7
@@ -23,19 +22,12 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Variables de entorno disponibles en todos los steps
     env:
       NODE_ENV: test
       PORT: 3000
-
-      # MongoDB
       MONGODB_URI: mongodb://localhost:27017/uteq_connect_test
-
-      # JWT — usa GitHub Secrets en producción (ver instrucciones abajo)
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       JWT_EXPIRES_IN: 1d
-
-      # Cloudinary — usa GitHub Secrets
       CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
       CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
       CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
@@ -53,8 +45,13 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Verificar que cross-env esté instalado
-        run: npx cross-env --version
+      - name: Instalar k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6 -y
 
       - name: Esperar a que MongoDB esté listo
         run: |
@@ -63,8 +60,9 @@ jobs:
             sleep 2
           done
 
-      - name: Correr tests
-        run: npm test -- --ci --forceExit --detectOpenHandles --coverage
+      # ── 1. Tests de integración Jest (.ts) ──
+      - name: Jest tests
+        run: npm test -- --ci --coverage
 
       - name: Subir reporte de cobertura
         if: always()
@@ -73,3 +71,18 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 7
+
+      # ── 2. Levantar servidor para k6 ──
+      - name: Levantar servidor en background
+        run: npm run start:dev &
+
+      - name: Esperar a que el servidor esté listo
+        run: |
+          until curl -s http://localhost:3000/ > /dev/null; do
+            echo "Esperando servidor..."
+            sleep 2
+          done
+
+      # ── 3. Tests de carga k6 (.js) ──
+      - name: k6 load test
+        run: k6 run src/__tests__/load.test.js
