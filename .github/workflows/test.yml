@@ -25,22 +25,26 @@ jobs:
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
 
     steps:
+      # ── 1. Clonar repo ──
       - name: Checkout código
         uses: actions/checkout@v4
 
+      # ── 2. Node ──
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
+      # ── 3. Dependencias ──
       - name: Instalar dependencias
         run: npm ci
 
-      # ── 1. Tests Jest ──
-      - name: Jest tests
+      # ── 4. Tests Jest ──
+      - name: Ejecutar tests (Jest)
         run: npm test -- --ci --coverage
 
+      # ── 5. Subir coverage ──
       - name: Subir cobertura
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,23 +53,17 @@ jobs:
           path: coverage/
           retention-days: 7
 
-      # ── 2. Instalar k6 ──
-      - name: Instalar k6
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gnupg
-          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update
-          sudo apt-get install -y k6
+      # ── 6. Instalar k6 (FORMA PRO) ──
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
 
-      # ── 3. Levantar servidor ──
-      - name: Levantar servidor en background
+      # ── 7. Levantar servidor ──
+      - name: Levantar servidor
         run: |
           NODE_ENV=production npm run start > server.log 2>&1 &
           echo $! > server.pid
 
-      # ── 4. Esperar servidor ──
+      # ── 8. Esperar servidor ──
       - name: Esperar servidor
         run: |
           TIMEOUT=40
@@ -73,7 +71,7 @@ jobs:
 
           until curl -s http://localhost:3000/ > /dev/null; do
             if [ $COUNTER -ge $TIMEOUT ]; then
-              echo "❌ Timeout: servidor no levantó"
+              echo "❌ Timeout: el servidor no levantó"
               echo "------ LOGS ------"
               cat server.log
               exit 1
@@ -86,11 +84,11 @@ jobs:
 
           echo "✅ Servidor listo!"
 
-      # ── 5. Test de carga ──
+      # ── 9. Test de carga ──
       - name: k6 load test
         run: k6 run src/__tests__/load.test.js
 
-      # ── 6. Apagar servidor ──
+      # ── 10. Apagar servidor ──
       - name: Apagar servidor
         if: always()
         run: |
