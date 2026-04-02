@@ -37,19 +37,11 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Instalar k6
-        run: |
-          sudo gpg -k
-          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update
-          sudo apt-get install k6 -y
-
-      # ── 1. Tests de integración Jest (.ts) ──
+      # ── 1. Tests Jest ──
       - name: Jest tests
         run: npm test -- --ci --coverage
 
-      - name: Subir reporte de cobertura
+      - name: Subir cobertura
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -57,32 +49,49 @@ jobs:
           path: coverage/
           retention-days: 7
 
-      # ── 2. Levantar servidor para k6 (NODE_ENV=production para que httpServer.listen() corra) ──
+      # ── 2. Instalar k6 ──
+      - name: Instalar k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+
+      # ── 3. Levantar servidor ──
       - name: Levantar servidor en background
         run: |
-          NODE_ENV=production npm run start:dev > server.log 2>&1 &
+          NODE_ENV=production npm run start > server.log 2>&1 &
           echo $! > server.pid
 
-      - name: Esperar a que el servidor esté listo
+      # ── 4. Esperar servidor ──
+      - name: Esperar servidor
         run: |
-          TIMEOUT=30
+          TIMEOUT=40
           COUNTER=0
+
           until curl -s http://localhost:3000/ > /dev/null; do
             if [ $COUNTER -ge $TIMEOUT ]; then
-              echo "❌ Timeout: el servidor no levantó en ${TIMEOUT}s"
+              echo "❌ Timeout: servidor no levantó"
+              echo "------ LOGS ------"
               cat server.log
               exit 1
             fi
-            echo "Esperando servidor... ($COUNTER/${TIMEOUT}s)"
+
+            echo "Esperando servidor... ($COUNTER/$TIMEOUT)"
             sleep 1
             COUNTER=$((COUNTER + 1))
           done
+
           echo "✅ Servidor listo!"
 
-      # ── 3. Tests de carga k6 (.js) ──
+      # ── 5. Test de carga ──
       - name: k6 load test
         run: k6 run src/__tests__/load.test.js
 
+      # ── 6. Apagar servidor ──
       - name: Apagar servidor
         if: always()
-        run: kill $(cat server.pid) 2>/dev/null || true
+        run: |
+          kill $(cat server.pid) 2>/dev/null || true

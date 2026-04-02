@@ -30,6 +30,4 @@ mongoose.connection.on('error', (err: Error) => {
     console.error('Error en MongoDB:', err);
 });
 
-connectDB();
-
 export default connectDB;
