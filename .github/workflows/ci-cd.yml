@@ -1,0 +1,143 @@
+name: Server CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGION: northamerica-south1
+  PROJECT: gpds-10mo
+  REPO: uteq-repo
+  IMAGE: backend
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_EXPIRES_IN: 1d
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+      CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar tests (Jest)
+        run: npm test -- --ci --coverage
+
+      - name: Subir cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Levantar servidor
+        run: |
+          NODE_ENV=production npm run start > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Esperar servidor
+        run: |
+          TIMEOUT=40
+          COUNTER=0
+          until curl -s http://localhost:3000/ > /dev/null; do
+            if [ $COUNTER -ge $TIMEOUT ]; then
+              echo "Timeout: el servidor no levantó"
+              cat server.log
+              exit 1
+            fi
+            echo "Esperando servidor... ($COUNTER/$TIMEOUT)"
+            sleep 1
+            COUNTER=$((COUNTER + 1))
+          done
+          echo "Servidor listo!"
+
+      - name: k6 load test
+        run: k6 run src/__tests__/load.test.js
+
+      - name: Apagar servidor
+        if: always()
+        run: kill $(cat server.pid) 2>/dev/null || true
+
+  build-and-deploy:
+    name: Build & Deploy Canary
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Autenticar en GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configurar Docker para Artifact Registry
+        run: gcloud auth configure-docker northamerica-south1-docker.pkg.dev --quiet
+
+      - name: Build imagen backend
+        run: |
+          docker build -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary \
+                       -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:${{ github.sha }} .
+
+      - name: Push imagen backend
+        run: |
+          docker push northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
+          docker push northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:${{ github.sha }}
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VM_CANARY_IP }} >> ~/.ssh/known_hosts
+
+      - name: Deploy canary en VM
+        run: |
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_CANARY_IP }} '
+            docker pull northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
+            docker stop uteq-backend-canary 2>/dev/null || true
+            docker rm uteq-backend-canary 2>/dev/null || true
+            docker run -d \
+              --name uteq-backend-canary \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e NODE_ENV=production \
+              northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
+            echo "Canary backend desplegado"
+          '
+
+      - name: Shift tráfico a canary en nginx
+        run: |
+          ssh-keyscan -H ${{ secrets.VM_NGINX_IP }} >> ~/.ssh/known_hosts
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_NGINX_IP }} '
+            sudo nginx -s reload
+            echo "Tráfico canary activado"
+          '
