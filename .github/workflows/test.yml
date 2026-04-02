@@ -1,0 +1,75 @@
+name: Tests CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Run Jest Tests
+    runs-on: ubuntu-latest
+
+    # Base de datos MongoDB para los tests
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Variables de entorno disponibles en todos los steps
+    env:
+      NODE_ENV: test
+      PORT: 3000
+
+      # MongoDB
+      MONGODB_URI: mongodb://localhost:27017/uteq_connect_test
+
+      # JWT — usa GitHub Secrets en producción (ver instrucciones abajo)
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_EXPIRES_IN: 1d
+
+      # Cloudinary — usa GitHub Secrets
+      CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+      CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+      CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Verificar que cross-env esté instalado
+        run: npx cross-env --version
+
+      - name: Esperar a que MongoDB esté listo
+        run: |
+          until mongosh --eval "db.runCommand({ ping: 1 })" --quiet; do
+            echo "Esperando MongoDB..."
+            sleep 2
+          done
+
+      - name: Correr tests
+        run: npm test -- --ci --forceExit --detectOpenHandles --coverage
+
+      - name: Subir reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
