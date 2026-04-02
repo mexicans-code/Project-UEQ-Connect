@@ -59,15 +59,32 @@ jobs:
 
       # ── 2. Levantar servidor para k6 ──
       - name: Levantar servidor en background
-        run: npm run start:dev &
+        run: |
+          npm run start:dev > server.log 2>&1 &
+          echo $! > server.pid
+          echo "Servidor iniciado con PID $(cat server.pid)"
 
       - name: Esperar a que el servidor esté listo
         run: |
+          TIMEOUT=30
+          COUNTER=0
           until curl -s http://localhost:3000/ > /dev/null; do
-            echo "Esperando servidor..."
-            sleep 2
+            if [ $COUNTER -ge $TIMEOUT ]; then
+              echo "❌ Timeout: el servidor no levantó en ${TIMEOUT}s"
+              echo "── server.log ──"
+              cat server.log
+              exit 1
+            fi
+            echo "Esperando servidor... ($COUNTER/${TIMEOUT}s)"
+            sleep 1
+            COUNTER=$((COUNTER + 1))
           done
+          echo "✅ Servidor listo!"
 
       # ── 3. Tests de carga k6 (.js) ──
       - name: k6 load test
         run: k6 run src/__tests__/load.test.js
+
+      - name: Apagar servidor
+        if: always()
+        run: kill $(cat server.pid) 2>/dev/null || true
