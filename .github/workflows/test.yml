@@ -45,6 +45,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install k6 -y
 
+      # ── Crear .env para que dotenv lo encuentre ──
+      - name: Crear archivo .env
+        run: |
+          cat > .env << ENVEOF
+          PORT=${{ secrets.PORT || 3000 }}
+          MONGO_URI=${{ secrets.MONGO_URI }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          JWT_EXPIRES_IN=1d
+          CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
+          GMAIL_USER=${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
+          ENVEOF
+
       # ── 1. Tests de integración Jest (.ts) ──
       - name: Jest tests
         run: npm test -- --ci --coverage
@@ -62,7 +78,6 @@ jobs:
         run: |
           npm run start:dev > server.log 2>&1 &
           echo $! > server.pid
-          echo "Servidor iniciado con PID $(cat server.pid)"
 
       - name: Esperar a que el servidor esté listo
         run: |
