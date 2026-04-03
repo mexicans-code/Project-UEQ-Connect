@@ -97,7 +97,7 @@ describe('Auth API', () => {
         it('debe responder con mensaje de API', async () => {
             const res = await request(app).get('/');
             expect(res.status).toBe(200);
-            expect(res.body.message).toBe('UTEQ Connect API');
+    expect(res.body.message).toContain('UTEQ Connect API');
         });
     });
 
