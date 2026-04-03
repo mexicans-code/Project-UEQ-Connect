@@ -1,6 +1,7 @@
 import express, { Application } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { register, collectDefaultMetrics } from 'prom-client';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import rateLimit from 'express-rate-limit';
@@ -24,6 +25,15 @@ dotenv.config();
 
 const app: Application = express();
 const httpServer = createServer(app);
+
+// Register default metrics
+collectDefaultMetrics();
+
+
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.send(await register.metrics());
+});
 
 export const io = new Server(httpServer, {
     cors: { origin: '*' }
@@ -116,9 +126,8 @@ app.use('/api/logs', logRoutes);
 export { emailLimiter };
 
 app.get('/', (req, res) => {
-    res.json({ message: 'UTEQ Connect API' });
+    res.json({ message: 'UTEQ Connect API v3 - Canary Saludooooooos :D' });
 });
-
 
 if (process.env.NODE_ENV !== 'test') {
     httpServer.listen(PORT, () => {

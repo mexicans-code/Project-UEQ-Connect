@@ -16,6 +16,9 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./UTEQ-Connect-Server
     env:
       NODE_ENV: test
       PORT: 3000
@@ -38,6 +41,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: UTEQ-Connect-Server/package-lock.json
 
       - name: Instalar dependencias
         run: npm ci
@@ -50,7 +54,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage/
+          path: UTEQ-Connect-Server/coverage/
           retention-days: 7
 
       - name: Setup k6
@@ -58,7 +62,8 @@ jobs:
 
       - name: Levantar servidor
         run: |
-          NODE_ENV=production npm run start > server.log 2>&1 &
+          npm run build
+          NODE_ENV=production node dist/index.js > server.log 2>&1 &
           echo $! > server.pid
 
       - name: Esperar servidor
@@ -103,9 +108,11 @@ jobs:
         run: gcloud auth configure-docker northamerica-south1-docker.pkg.dev --quiet
 
       - name: Build imagen backend
+        working-directory: ./UTEQ-Connect-Server
         run: |
-          docker build -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary \
-                       -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:${{ github.sha }} .
+          docker build \
+            -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary \
+            -t northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:${{ github.sha }} .
 
       - name: Push imagen backend
         run: |
@@ -122,14 +129,23 @@ jobs:
       - name: Deploy canary en VM
         run: |
           ssh ${{ secrets.VM_USER }}@${{ secrets.VM_CANARY_IP }} '
-            docker pull northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
-            docker stop uteq-backend-canary 2>/dev/null || true
-            docker rm uteq-backend-canary 2>/dev/null || true
-            docker run -d \
+            sudo gcloud auth configure-docker northamerica-south1-docker.pkg.dev --quiet
+            sudo docker pull northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
+            sudo docker stop uteq-backend-canary 2>/dev/null || true
+            sudo docker rm uteq-backend-canary 2>/dev/null || true
+            sudo docker run -d \
               --name uteq-backend-canary \
               --restart unless-stopped \
               -p 3000:3000 \
               -e NODE_ENV=production \
+              -e PORT=3000 \
+              -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+              -e DB_NAME="${{ secrets.DB_NAME }}" \
+              -e CLOUDINARY_CLOUD_NAME="${{ secrets.CLOUDINARY_CLOUD_NAME }}" \
+              -e CLOUDINARY_API_KEY="${{ secrets.CLOUDINARY_API_KEY }}" \
+              -e CLOUDINARY_API_SECRET="${{ secrets.CLOUDINARY_API_SECRET }}" \
+              -e GMAIL_USER="${{ secrets.GMAIL_USER }}" \
+              -e GMAIL_APP_PASSWORD="${{ secrets.GMAIL_APP_PASSWORD }}" \
               northamerica-south1-docker.pkg.dev/gpds-10mo/uteq-repo/backend:canary
             echo "Canary backend desplegado"
           '
