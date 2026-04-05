@@ -5,6 +5,8 @@ import { register, collectDefaultMetrics } from 'prom-client';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
+import { v4 as uuidv4 } from 'uuid';
 import connectDB from './database/MongoDB.js';
 import locationRoutes from './apis/location/location.routes.js';
 import eventRoutes from './apis/event/event.routes.js';
@@ -18,17 +20,15 @@ import { deactivateExpiredEvents } from './apis/event/event.service.js';
 import graphRoutes from './apis/rutas/graph_routes.js';
 import { logMiddleware } from './apis/logs/log.middleware.js';
 import logRoutes from './apis/logs/log.routes.js';
-
 import path from 'path';
 import fs from 'fs';
+
 dotenv.config();
 
 const app: Application = express();
 const httpServer = createServer(app);
 
-// Register default metrics
 collectDefaultMetrics();
-
 
 app.get('/metrics', async (req, res) => {
     res.set('Content-Type', register.contentType);
@@ -49,7 +49,7 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 
 const generalLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // cada 1 minuto
+    windowMs: 1 * 60 * 1000,
     max: 100,
     standardHeaders: true,
     legacyHeaders: false,
@@ -57,7 +57,7 @@ const generalLimiter = rateLimit({
 });
 
 const authLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // cada 1 minuto
+    windowMs: 1 * 60 * 1000,
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
@@ -65,7 +65,7 @@ const authLimiter = rateLimit({
 });
 
 const emailLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // cada 1 minuto
+    windowMs: 1 * 60 * 1000,
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
@@ -89,16 +89,36 @@ if (!fs.existsSync(uploadsEvents)) {
     console.log('Carpeta uploads/events ya existe');
 }
 
-app.use(cors());
+app.use(cors({
+    origin: true,        // refleja el origen del request
+    credentials: true    // necesario para que las cookies viajen con CORS
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
-console.log('Archivos estáticos configurados');
 
+// ── Cookie parser (debe ir antes del middleware de sesión) ──
+app.use(cookieParser());
+
+// ── Middleware de sesión anónima ─────────────────────────────
+app.use((req, res, next) => {
+    if (!req.cookies?.session_id) {
+        const sessionId = uuidv4();
+        res.cookie('session_id', sessionId, {
+            httpOnly: true,
+            maxAge: 7 * 24 * 60 * 60 * 1000,                     // 7 días
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            secure: process.env.NODE_ENV === 'production',
+        });
+        // Lo dejamos disponible en el request actual también
+        req.cookies.session_id = sessionId;
+    }
+    next();
+});
+// ────────────────────────────────────────────────────────────
 
 app.set('trust proxy', true);
 app.use('/api/', generalLimiter);
-
 
 connectDB();
 
@@ -131,8 +151,9 @@ app.get('/', (req, res) => {
 
 if (process.env.NODE_ENV !== 'test') {
     httpServer.listen(PORT, () => {
-        console.log(` Servidor corriendo en http://localhost:${PORT}`);
-        console.log(` Tarea de desactivación automática de eventos: ACTIVA`);
+        console.log(`Servidor corriendo en http://localhost:${PORT}`);
+        console.log(`Tarea de desactivación automática de eventos: ACTIVA`);
     });
 }
+
 export default app;
